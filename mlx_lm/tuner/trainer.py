@@ -16,7 +16,7 @@ from mlx.utils import tree_flatten, tree_map
 from transformers import PreTrainedTokenizer
 
 from .datasets import CacheDataset
-from ..models.cache import make_prompt_cache, KVCache
+from ..models.cache import KVCache, make_prompt_cache
 
 
 def reset_prompt_cache(cache):
@@ -74,7 +74,7 @@ class TrainingArgs:
         default=False,
         metadata={"help": "Use gradient checkpointing to reduce memory use."},
     )
-    seq_step_size : Optional[int] = field(
+    seq_step_size: Optional[int] = field(
         default=None,
         metadata={"help": "The examples are processsed in seq_step_size chunks."},
     )
@@ -196,7 +196,7 @@ def evaluate(
     ):
         seq_length = batch[0].shape[1]
         for s in range(0, seq_length, seq_step_size):
-            local_batch = (batch[0][:, s:s+seq_step_size], batch[1])
+            local_batch = (batch[0][:, s : s + seq_step_size], batch[1])
             losses, toks = loss(model, *local_batch, cache)
             all_losses += losses * toks
             ntokens += toks
@@ -273,7 +273,7 @@ def train(
         seq_length = batch[0].shape[1]
         grad_accum = None
         for s in range(0, seq_length, seq_step_size):
-            local_batch = (batch[0][:, s:s+seq_step_size], batch[1])
+            local_batch = (batch[0][:, s : s + seq_step_size], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
             prev_n_tokens = n_tokens
             losses += toks * lvalue
@@ -284,8 +284,9 @@ def train(
             else:
                 scale_g = toks / n_tokens
                 scale_acc = prev_n_tokens / n_tokens
-                grad_accum = tree_map(lambda g, acc: scale_g * g + scale_acc * acc, grad, grad_accum)
-
+                grad_accum = tree_map(
+                    lambda g, acc: scale_g * g + scale_acc * acc, grad, grad_accum
+                )
 
             # Let go of the prompt cache before the last eval
             if s + seq_step_size >= seq_length:
