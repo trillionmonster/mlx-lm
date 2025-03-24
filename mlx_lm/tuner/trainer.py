@@ -15,8 +15,8 @@ from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
 from transformers import PreTrainedTokenizer
 
-from .datasets import CacheDataset
 from ..models.cache import KVCache, make_prompt_cache
+from .datasets import CacheDataset
 
 
 def reset_prompt_cache(cache):
@@ -267,6 +267,7 @@ def train(
 
     model.train()
     seq_step_size = args.seq_step_size or args.max_seq_length
+
     def seq_split_step(batch):
         losses = mx.array(0.0)
         n_tokens = mx.array(0.0)
@@ -299,7 +300,6 @@ def train(
 
     loss_value_and_grad = nn.value_and_grad(model, loss)
 
->>>>>>> 568a8d6 (use gradient accumulation)
     losses = 0
     n_tokens = 0
     steps = 0
@@ -321,7 +321,6 @@ def train(
         # is always measured before any training.
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             tic = time.perf_counter()
-            val_loss = 0.0
             val_loss = evaluate(
                 model=model,
                 dataset=val_dataset,
