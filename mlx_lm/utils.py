@@ -145,6 +145,7 @@ def load_model(
     model_path: Path,
     lazy: bool = False,
     strict: bool = True,
+    sequential_load: bool = False,
     model_config: dict = {},
     get_model_classes: Callable[[dict], Tuple[Type[nn.Module], Type]] = _get_classes,
 ) -> nn.Module:
@@ -222,6 +223,10 @@ def load_model(
         model.shard()
 
     if not lazy:
+        weights.clear()
+        if sequential_load:
+            for layer in model.layers:
+                mx.eval(layer.parameters())
         mx.eval(model.parameters())
 
     model.eval()
@@ -234,6 +239,7 @@ def load(
     model_config={},
     adapter_path: Optional[str] = None,
     lazy: bool = False,
+    sequential_load: bool = False,
 ) -> Tuple[nn.Module, TokenizerWrapper]:
     """
     Load the model and tokenizer from a given path or a huggingface repository.
@@ -249,6 +255,8 @@ def load(
         lazy (bool): If ``False`` eval the model parameters to make sure they are
             loaded in memory before returning, otherwise they will be loaded
             when needed. Default: ``False``
+        sequential_load (bool): If True then load each layer sequentially to
+            ensure that we are not wasting memory. Default: ``False``
     Returns:
         Tuple[nn.Module, TokenizerWrapper]: A tuple containing the loaded model and tokenizer.
 
@@ -258,7 +266,7 @@ def load(
     """
     model_path = get_model_path(path_or_hf_repo)
 
-    model, config = load_model(model_path, lazy)
+    model, config = load_model(model_path, lazy=lazy, sequential_load=sequential_load)
     if adapter_path is not None:
         model = load_adapters(model, adapter_path)
         model.eval()
@@ -272,7 +280,7 @@ def load(
 def fetch_from_hub(
     model_path: Path, lazy: bool = False
 ) -> Tuple[nn.Module, dict, PreTrainedTokenizer]:
-    model, config = load_model(model_path, lazy)
+    model, config = load_model(model_path, lazy=lazy)
     tokenizer = load_tokenizer(
         model_path, eos_token_ids=config.get("eos_token_id", None)
     )

@@ -92,6 +92,7 @@ def main():
         args.model,
         adapter_path=args.adapter_path,
         tokenizer_config={"trust_remote_code": True},
+        sequential_load=world.size() > 1,
     )
 
     def print_help():

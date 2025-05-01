@@ -769,6 +769,7 @@ def main():
         model_path,
         adapter_path=args.adapter_path,
         tokenizer_config=tokenizer_config,
+        sequential_load=mx.distributed.init().size() > 1,
     )
     for eos_token in args.extra_eos_token:
         tokenizer.add_eos_token(eos_token)
