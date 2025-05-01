@@ -834,12 +834,14 @@ def main():
         xtc_threshold=args.xtc_threshold,
         xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),
     )
+    world = mx.distributed.init()
+    print(f"Node {world.rank()} of {world.size()}", flush=True)
     response = generate(
         model,
         tokenizer,
         prompt,
         max_tokens=args.max_tokens,
-        verbose=args.verbose,
+        verbose=args.verbose and world.rank() == 0,
         sampler=sampler,
         max_kv_size=args.max_kv_size,
         prompt_cache=prompt_cache if using_cache else None,
@@ -849,7 +851,7 @@ def main():
         draft_model=draft_model,
         num_draft_tokens=args.num_draft_tokens,
     )
-    if not args.verbose:
+    if not args.verbose and world.rank() == 0:
         print(response)
 
 

@@ -19,6 +19,13 @@ DEFAULT_MAX_TOKENS = 256
 DEFAULT_MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
 
+def print_zero(group, *args, **kwargs):
+    if group.rank() != 0:
+        return
+    flush = kwargs.pop("flush", True)
+    print(*args, **kwargs, flush=flush)
+
+
 def setup_arg_parser():
     """Set up and return the argument parser."""
     parser = argparse.ArgumentParser(description="Chat with an LLM")
@@ -80,6 +87,7 @@ def main():
     if args.seed is not None:
         mx.random.seed(args.seed)
 
+    world = mx.distributed.init()
     model, tokenizer = load(
         args.model,
         adapter_path=args.adapter_path,
@@ -87,16 +95,18 @@ def main():
     )
 
     def print_help():
-        print("The command list:")
-        print("- 'q' to exit")
-        print("- 'r' to reset the chat")
-        print("- 'h' to display these commands")
+        print_zero(world, "The command list:")
+        print_zero(world, "- 'q' to exit")
+        print_zero(world, "- 'r' to reset the chat")
+        print_zero(world, "- 'h' to display these commands")
 
-    print(f"[INFO] Starting chat session with {args.model}.")
+    print(f"Node {world.rank()} of {world.size()}", flush=True)
+    print_zero(world, f"[INFO] Starting chat session with {args.model}.")
     print_help()
+
     prompt_cache = make_prompt_cache(model, args.max_kv_size)
     while True:
-        query = input(">> ")
+        query = input(">> " if world.rank() == 0 else "")
         if query == "q":
             break
         if query == "r":
@@ -123,8 +133,8 @@ def main():
             ),
             prompt_cache=prompt_cache,
         ):
-            print(response.text, flush=True, end="")
-        print()
+            print_zero(world, response.text, end="")
+        print_zero(world)
 
 
 if __name__ == "__main__":
