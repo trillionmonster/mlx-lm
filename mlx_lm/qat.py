@@ -28,6 +28,62 @@ from mlx_lm.utils import (
 )
 
 
+class StraightThroughQuantizedEmbedding(nn.Module):
+    def __init__(
+        self,
+        num_embeddings: int,
+        dims: int,
+        group_size: int = 64,
+        bits: int = 4,
+    ):
+        super().__init__()
+
+        # Quantization config
+        self.group_size = group_size
+        self.bits = bits
+
+        # Initialize the quantized weight
+        self.weight = mx.zeros(shape=(num_embeddings, dims))
+        self.num_embeddings = num_embeddings
+        self.dims = dims
+
+    def __call__(self, x):
+        w, s, b = mx.quantize(self.weight, self.group_size, self.bits)
+        y = self.weight[x]
+        yq = mx.dequantize(
+            w[x],
+            scales=s[x],
+            biases=b[x],
+            group_size=self.group_size,
+            bits=self.bits,
+        )
+        return (y - mx.stop_gradient(y)) + mx.stop_gradient(yq)
+
+    def as_linear(self, x):
+        # Quantize and then matmul
+        w, s, b = mx.quantize(self.weight, self.group_size, self.bits)
+        y = x @ self.weight.T
+        yq = mx.quantized_matmul(
+            x,
+            w,
+            scales=s,
+            biases=b,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+        )
+        return (y - mx.stop_gradient(y)) + mx.stop_gradient(yq)
+
+    @classmethod
+    def from_embedding(
+        cls, embedding_layer: nn.Module, group_size: int = 64, bits: int = 4
+    ):
+        embedding_dims, dims = embedding_layer.weight.shape
+        ql = cls(embedding_dims, dims, group_size, bits)
+        ql.weight = embedding_layer.weight
+        return ql
+
+
 class StraightThroughQuantizedLinear(nn.Module):
     def __init__(
         self,
@@ -50,7 +106,6 @@ class StraightThroughQuantizedLinear(nn.Module):
     def __call__(self, x):
         # Quantize and then matmul
         w, s, b = mx.quantize(self.weight, self.group_size, self.bits)
-        # TODO use a custom function as this is pretty inefficient
         y = x @ self.weight.T
         yq = mx.quantized_matmul(
             x,
@@ -83,6 +138,10 @@ def quantize(
     def _maybe_quantize(path, m):
         if isinstance(m, nn.Linear):
             return StraightThroughQuantizedLinear.from_linear(
+                m, group_size=group_size, bits=bits
+            )
+        elif isinstance(m, nn.Embedding):
+            return StraightThroughQuantizedEmbedding.from_embedding(
                 m, group_size=group_size, bits=bits
             )
         else:
