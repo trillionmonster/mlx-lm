@@ -308,6 +308,8 @@ def main():
 
     model_path = get_model_path(args.model, revision=None)
     model, config, tokenizer = fetch_from_hub(model_path, lazy=True)
+    if "quantization" in config:
+        raise ValueError("Teacher model for QAT training should not be quantized")
 
     calibration_data = load_data(tokenizer, args.data_path, args.num_samples)
 
