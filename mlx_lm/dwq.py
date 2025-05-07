@@ -45,9 +45,10 @@ def dwq_quantize(
     data,
     batch_size: int = 2,
     max_seq_length: int = 2048,
-    temperature: float = 0.5,
-    dtype: mx.Dtype = mx.bfloat16,
+    temperature: float = 1.0,
+    activation_layer_step: float = 0.25,
     activation_loss_weight: float = 1e-1,
+    dtype: mx.Dtype = mx.bfloat16,
 ):
     group = mx.distributed.init()
     world_size = group.size()
@@ -60,15 +61,16 @@ def dwq_quantize(
     q_model.apply_to_modules(unfreeze)
     print_trainable_parameters(q_model)
 
-    quarter_idx = len(model.layers) // 4
-    layer_ids = [quarter_idx, 2 * quarter_idx, 3 * quarter_idx]
+    layer_id_step = int(activation_layer_step * len(model.layers))
+    layer_ids = list(range(len(model.layers)))[layer_id_step::layer_id_step]
 
     for lid in layer_ids:
         model.layers[lid] = Catcher(model.layers[lid])
         q_model.layers[lid] = Catcher(q_model.layers[lid])
 
     def log_norm(x):
-        x = x * (1 / temperature)
+        if temperature != 1.0:
+            x = x * (1 / temperature)
         return x - mx.logsumexp(x, axis=-1, keepdims=True)
 
     def forward(model, inputs):
@@ -86,10 +88,14 @@ def dwq_quantize(
         losses = nn.losses.kl_div_loss(logprobs, targets, reduction="none")
         mask = mx.arange(targets.shape[1]) < lengths[:, 1:]
         ntoks = mask.sum()
-        loss = (mask * losses).sum() / ntoks
-        for qe, e in zip(q_extra_targets, extra_targets):
-            l = (qe - e).abs().mean(axis=-1)
-            loss = loss + activation_loss_weight * (mask * l).sum() / ntoks
+        kl_loss = (mask * losses).sum() / ntoks
+        act_loss = mx.stack(
+            [
+                (mask * (qe - e).abs().mean(axis=-1)).sum() / ntoks
+                for qe, e in zip(q_extra_targets, extra_targets)
+            ]
+        )
+        loss = kl_loss + activation_loss_weight * act_loss.mean()
         return loss, ntoks
 
     def step(inputs, targets, extra_targets, lengths, params):
@@ -171,7 +177,7 @@ def load_data(tokenizer, data_path: str, num_samples: int):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", "-m", default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model", "-m", default="Qwen/Qwen3-4B")
     parser.add_argument("--quantized-model", default=None)
     parser.add_argument(
         "--mlx-path", default="mlx_model", help="Path to save the quantized model."
@@ -193,8 +199,8 @@ def main():
     )
     parser.add_argument("--max-seq-length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=1e-6)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument(
         "--data-path",
         type=str,
@@ -204,7 +210,7 @@ def main():
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.5,
+        default=1.0,
         help="Temperature scaling for the loss.",
     )
     args = parser.parse_args()
