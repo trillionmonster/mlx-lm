@@ -28,6 +28,16 @@ from mlx_lm.utils import (
 )
 
 
+class Catcher(nn.Module):
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def __call__(self, *args, **kwargs):
+        self.outputs = self.module(*args, **kwargs)
+        return self.outputs
+
+
 def dwq_quantize(
     model,
     q_model,
@@ -37,6 +47,7 @@ def dwq_quantize(
     max_seq_length: int = 2048,
     temperature: float = 0.5,
     dtype: mx.Dtype = mx.bfloat16,
+    activation_loss_weight: float = 1e-1,
 ):
     group = mx.distributed.init()
     world_size = group.size()
@@ -49,22 +60,41 @@ def dwq_quantize(
     q_model.apply_to_modules(unfreeze)
     print_trainable_parameters(q_model)
 
+    quarter_idx = len(model.layers) // 4
+    layer_ids = [quarter_idx, 2 * quarter_idx, 3 * quarter_idx]
+
+    for lid in layer_ids:
+        model.layers[lid] = Catcher(model.layers[lid])
+        q_model.layers[lid] = Catcher(q_model.layers[lid])
+
     def log_norm(x):
         x = x * (1 / temperature)
         return x - mx.logsumexp(x, axis=-1, keepdims=True)
 
-    def loss_fn(params, x, targets, lengths):
+    def forward(model, inputs):
+        logprobs = log_norm(model(inputs).astype(mx.float32))
+        extra_targets = [
+            model.layers[lid].outputs.astype(mx.float32) for lid in layer_ids
+        ]
+        for lid in layer_ids:
+            model.layers[lid].outputs = None
+        return logprobs, extra_targets
+
+    def loss_fn(params, x, targets, extra_targets, lengths):
         q_model.update(tree_map(lambda x: x.astype(dtype), params))
-        logits = q_model(x).astype(mx.float32)
-        losses = nn.losses.kl_div_loss(log_norm(logits), targets, reduction="none")
+        logprobs, q_extra_targets = forward(q_model, x)
+        losses = nn.losses.kl_div_loss(logprobs, targets, reduction="none")
         mask = mx.arange(targets.shape[1]) < lengths[:, 1:]
         ntoks = mask.sum()
         loss = (mask * losses).sum() / ntoks
+        for qe, e in zip(q_extra_targets, extra_targets):
+            l = (qe - e).abs().mean(axis=-1)
+            loss = loss + activation_loss_weight * (mask * l).sum() / ntoks
         return loss, ntoks
 
-    def step(inputs, targets, lengths, params):
+    def step(inputs, targets, extra_targets, lengths, params):
         (loss, ntoks), grads = mx.value_and_grad(loss_fn)(
-            params, inputs, targets, lengths
+            params, inputs, targets, extra_targets, lengths
         )
         grads = nn.average_gradients(grads)
         params = opt.apply_gradients(grads, params)
@@ -82,9 +112,9 @@ def dwq_quantize(
     for it, (batch, lengths) in enumerate(
         iterate_batches(data, batch_size, max_seq_length)
     ):
-        targets = log_norm(model(batch).astype(mx.float32))
-        mx.eval(targets)
-        loss, ntoks, params = step(batch, targets, lengths, params)
+        targets, extra_targets = forward(model, batch)
+        mx.eval(targets, extra_targets)
+        loss, ntoks, params = step(batch, targets, extra_targets, lengths, params)
         mx.eval(loss, params)
         loss = mx.distributed.all_sum(loss, stream=mx.cpu).item() / world_size
         ntoks = mx.distributed.all_sum(ntoks, stream=mx.cpu).item()
@@ -97,6 +127,8 @@ def dwq_quantize(
                 flush=True,
             )
     q_model.update(tree_map(lambda x: x.astype(dtype), params))
+    for lid in layer_ids:
+        q_model.layers[lid] = q_model.layers[lid].module
 
 
 def save_model(
