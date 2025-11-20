@@ -13,12 +13,9 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 from typing import Optional, List, Dict, Any, Union, Literal
 
-# Ensure we use the local mlx_lm package instead of the installed one
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
-from mlx_lm import load
-from mlx_lm.generate import BatchGenerator
-from mlx_lm.sample_utils import make_sampler
+from .generate import BatchGenerator
+from .sample_utils import make_sampler
+from .utils import load
 
 # Configure logging
 logging.basicConfig(

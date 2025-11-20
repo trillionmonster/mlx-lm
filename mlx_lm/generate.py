@@ -909,6 +909,8 @@ class BatchGenerator:
         stop_tokens: Optional[set] = None,
         sampler: Optional[Callable[[mx.array], mx.array]] = None,
         completion_batch_size: int = 32,
+        prefill_batch_size: Optional[int] = None,
+        prefill_step_size: int = 512,
     ):
         self.model = model
         self.unprocessed_prompts = []
@@ -917,6 +919,8 @@ class BatchGenerator:
         self.sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
         self.uid_count = 0
         self.completion_batch_size = completion_batch_size
+        self.prefill_batch_size = prefill_batch_size or completion_batch_size
+        self.prefill_step_size = prefill_step_size
         self._stats = BatchStats()
 
         self.active_batch = None
@@ -986,7 +990,10 @@ class BatchGenerator:
             len(self.unprocessed_prompts) > 0
             and (self.completion_batch_size - num_active) > 0
         ):
-            n_to_take = self.completion_batch_size - num_active
+            n_to_take = min(
+                self.completion_batch_size - num_active,
+                self.prefill_batch_size,
+            )
             prompts = self.unprocessed_prompts[:n_to_take]
             self.unprocessed_prompts = self.unprocessed_prompts[n_to_take:]
 
@@ -999,7 +1006,6 @@ class BatchGenerator:
 
             toc = time.perf_counter()
             self._stats.prompt_time += toc - tic
-            return []
 
         # 2. Run decode for active batch
         batch = self.active_batch

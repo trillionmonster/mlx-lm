@@ -4,7 +4,7 @@ This directory contains advanced examples built using `mlx-lm`.
 
 ## Dynamic Batch Server
 
-`dynamic_batch_server.py` is a lightweight inference server implemented based on Python's `http.server`. It utilizes `mlx-lm`'s `BatchGenerator` to implement dynamic batching, significantly improving throughput when handling concurrent requests.
+`mlx_lm.batch_server` is a lightweight inference server implemented based on Python's `http.server`. It utilizes `mlx-lm`'s `BatchGenerator` to implement dynamic batching, significantly improving throughput when handling concurrent requests.
 
 The server provides an OpenAI API compatible interface (`/v1/chat/completions`), supporting both streaming and non-streaming responses.
 
@@ -19,7 +19,7 @@ The server provides an OpenAI API compatible interface (`/v1/chat/completions`),
 Start the server:
 
 ```bash
-python dynamic_batch_server.py --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
+mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 ```
 
 ### Arguments
