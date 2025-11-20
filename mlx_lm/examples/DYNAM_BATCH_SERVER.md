@@ -1,41 +1,41 @@
-# MLX LM 示例
+# MLX LM Examples
 
-本目录包含使用 `mlx-lm` 构建的高级示例。
+This directory contains advanced examples built using `mlx-lm`.
 
-## 动态批处理服务器 (Dynamic Batch Server)
+## Dynamic Batch Server
 
-`dynamic_batch_server.py` 是一个基于 Python `http.server` 实现的轻量级推理服务器。它利用 `mlx-lm` 的 `BatchGenerator` 实现了动态批处理（Dynamic Batching），能够在处理并发请求时显著提高吞吐量。
+`dynamic_batch_server.py` is a lightweight inference server implemented based on Python's `http.server`. It utilizes `mlx-lm`'s `BatchGenerator` to implement dynamic batching, significantly improving throughput when handling concurrent requests.
 
-该服务器提供了一个兼容 OpenAI API 的接口 (`/v1/chat/completions`)，支持流式 (streaming) 和非流式响应。
+The server provides an OpenAI API compatible interface (`/v1/chat/completions`), supporting both streaming and non-streaming responses.
 
-### 特性
+### Features
 
-- **动态批处理**: 自动将多个并发请求合并为一个批次进行推理，最大化 GPU 利用率。
-- **OpenAI 兼容**: 支持标准的 OpenAI 聊天补全 API。
-- **流式输出**: 支持 Server-Sent Events (SSE) 流式输出。
+- **Dynamic Batching**: Automatically merges multiple concurrent requests into a single batch for inference, maximizing GPU utilization.
+- **OpenAI Compatible**: Supports the standard OpenAI Chat Completions API.
+- **Streaming Output**: Supports Server-Sent Events (SSE) streaming output.
 
-### 用法
+### Usage
 
-启动服务器：
+Start the server:
 
 ```bash
 python dynamic_batch_server.py --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 ```
 
-### 参数说明
+### Arguments
 
-| 参数 | 说明 | 默认值 |
+| Argument | Description | Default |
 |------|------|--------|
-| `--model` | 模型路径或 Hugging Face 仓库 ID (必填) | - |
-| `--adapter-path` | LoRA 适配器路径 (可选) | None |
-| `--host` | 绑定的主机地址 | 127.0.0.1 |
-| `--port` | 监听端口 | 8080 |
-| `--batch-size` | 最大批处理大小 | 32 |
-| `--log-level` | 日志级别 (DEBUG, INFO, WARNING, ERROR) | INFO |
+| `--model` | Model path or Hugging Face repo ID (Required) | - |
+| `--adapter-path` | LoRA adapter path (Optional) | None |
+| `--host` | Host address to bind | 127.0.0.1 |
+| `--port` | Port to listen on | 8080 |
+| `--batch-size` | Maximum batch size | 32 |
+| `--log-level` | Log level (DEBUG, INFO, WARNING, ERROR) | INFO |
 
-### API 调用示例
+### API Call Example
 
-你可以使用 `curl` 或 `openai` Python 客户端进行调用：
+You can use `curl` or the `openai` Python client to make calls:
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
@@ -49,49 +49,49 @@ curl http://localhost:8080/v1/chat/completions \
 
 ---
 
-## 基准测试客户端 (Benchmark Client)
+## Benchmark Client
 
-`benchmark_client.py` 是一个用于压力测试和性能评估的工具。它可以模拟多个并发用户向服务器发送请求，并计算关键的性能指标。
+`benchmark_client.py` is a tool for stress testing and performance evaluation. It can simulate multiple concurrent users sending requests to the server and calculate key performance metrics.
 
-### 依赖
+### Dependencies
 
-需要安装 `openai` 库：
+Requires the `openai` library:
 
 ```bash
 pip install openai
 ```
 
-### 用法
+### Usage
 
-运行基准测试：
+Run the benchmark:
 
 ```bash
 python benchmark_client.py --concurrency 8 --requests 50 --stream --model mlx-community/Llama-3.2-3B-Instruct-4bit
 ```
 
-### 参数说明
+### Arguments
 
-| 参数 | 说明 | 默认值 |
+| Argument | Description | Default |
 |------|------|--------|
-| `--base-url` | API 基础 URL | http://localhost:8080/v1 |
-| `--api-key` | API 密钥 (服务器未验证时可随意填写) | EMPTY |
-| `--model` | 模型名称 | default_model |
-| `--concurrency` | 并发线程数 (模拟用户数) | 4 |
-| `--requests` | 发送的总请求数 | 20 |
-| `--stream` | 是否使用流式请求 (推荐开启以计算 TTFT) | False |
-| `--min-delay` | 请求之间的最小随机延迟 (秒) | 0.1 |
-| `--max-delay` | 请求之间的最大随机延迟 (秒) | 2.0 |
-| `--min-tokens` | 生成的最小 token 数 (通过 max_tokens 控制) | 10 |
-| `--max-tokens` | 生成的最大 token 数 | 512 |
+| `--base-url` | API Base URL | http://localhost:8080/v1 |
+| `--api-key` | API Key (Can be anything if server doesn't verify) | EMPTY |
+| `--model` | Model name | default_model |
+| `--concurrency` | Number of concurrent threads (simulated users) | 4 |
+| `--requests` | Total number of requests to send | 20 |
+| `--stream` | Whether to use streaming requests (Recommended for calculating TTFT) | False |
+| `--min-delay` | Minimum random delay between requests (seconds) | 0.1 |
+| `--max-delay` | Maximum random delay between requests (seconds) | 2.0 |
+| `--min-tokens` | Minimum tokens to generate (controlled via max_tokens) | 10 |
+| `--max-tokens` | Maximum tokens to generate | 512 |
 
-### 输出指标解释
+### Output Metrics Explanation
 
-测试完成后，客户端会输出以下统计信息：
+After the test completes, the client outputs the following statistics:
 
-- **Successful requests**: 成功完成的请求数量。
-- **Total tokens generated**: 所有请求生成的总 token 数量。
-- **Total duration**: 测试总耗时。
-- **Throughput (TPS)**: 系统吞吐量 (Tokens Per Second)。
-- **Avg Latency**: 平均请求延迟 (从发送到收到完整响应)。
-- **Avg TTFT (Time To First Token)**: 平均首字延迟 (仅在流式模式下准确)。
-- **Avg ITL (Inter-Token Latency)**: 平均 token 间延迟 (生成的流畅度)。
+- **Successful requests**: Number of requests successfully completed.
+- **Total tokens generated**: Total number of tokens generated across all requests.
+- **Total duration**: Total duration of the test.
+- **Throughput (TPS)**: System throughput (Tokens Per Second).
+- **Avg Latency**: Average request latency (from sending to receiving full response).
+- **Avg TTFT (Time To First Token)**: Average Time To First Token (Accurate only in streaming mode).
+- **Avg ITL (Inter-Token Latency)**: Average Inter-Token Latency (Generation smoothness).

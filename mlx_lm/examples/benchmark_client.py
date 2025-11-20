@@ -119,7 +119,6 @@ def main():
         "what is the meaning of life, the universe, and everything?",
         "how to make a perfect cup of coffee?",
         "is there a god?",
-        "你好",
         "what is the airspeed velocity of an unladen swallow?" ,
         "why is the sky blue?",
         "who won the world series in 2020?",       
