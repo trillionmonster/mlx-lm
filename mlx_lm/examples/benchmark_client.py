@@ -131,6 +131,7 @@ def main():
         "How does blockchain technology work?"       
         
     ]
+    prompts = [p*100 for p in prompts if p.strip()]
 
     print(f"Starting benchmark against {args.base_url}")
     print(f"Concurrency: {args.concurrency}, Total Requests: {args.requests}")

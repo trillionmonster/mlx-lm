@@ -13,9 +13,10 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 from typing import Optional, List, Dict, Any, Union, Literal
 
-from .generate import BatchGenerator
+from .generate import BatchGenerator, Batch, BatchStats
 from .sample_utils import make_sampler
 from .utils import load
+from .prompt_cache_batch_generator import PromptCacheBatchGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -59,8 +60,10 @@ class ModelWorker(threading.Thread):
                  temp: float = 0.0,
                  top_p: float = 1.0,
                  top_k: int = 0,
-                 min_p: float = 0.0,
-                 default_max_tokens: int = 512):
+        min_p: float = 0.0,
+        default_max_tokens: int = 512,
+        radix_cache_size: int = 20*1024 * 1024 * 1024,
+        use_prompt_cache: bool = False):
         super().__init__()
         self.request_queue = queue.Queue()
         self.model_path = model_path
@@ -75,6 +78,8 @@ class ModelWorker(threading.Thread):
         self.top_k = top_k
         self.min_p = min_p
         self.default_max_tokens = default_max_tokens
+        self.radix_cache_size = radix_cache_size
+        self.use_prompt_cache = use_prompt_cache
         
         self.daemon = True
         self.running = True
@@ -103,12 +108,23 @@ class ModelWorker(threading.Thread):
             min_p=self.min_p
         )
 
-        gen = BatchGenerator(
-            self.model, 
-            stop_tokens=self.tokenizer.eos_token_ids,
-            sampler=sampler,
-            completion_batch_size=self.max_batch_size,
-        )
+        if self.use_prompt_cache:
+            logger.info(f"Using PromptCacheBatchGenerator with cache size {self.radix_cache_size} bytes")
+            gen = PromptCacheBatchGenerator(
+                self.model, 
+                stop_tokens=self.tokenizer.eos_token_ids,
+                sampler=sampler,
+                completion_batch_size=self.max_batch_size,
+                radix_cache_size=self.radix_cache_size,
+            )
+        else:
+            logger.info("Using standard BatchGenerator (Prompt Cache Disabled)")
+            gen = BatchGenerator(
+                self.model, 
+                stop_tokens=self.tokenizer.eos_token_ids,
+                sampler=sampler,
+                completion_batch_size=self.max_batch_size,
+            )
 
         uid_map: Dict[int, GenerationRequest] = {}
         
@@ -250,19 +266,29 @@ class APIHandler(BaseHTTPRequestHandler):
         self._set_headers(204)
 
     def do_GET(self):
-        if self.path == "/v1/models":
-            self.handle_models()
-        elif self.path == "/health":
-            self.handle_health()
-        else:
-            self.send_error(404)
+        try:
+            if self.path == "/v1/models":
+                self.handle_models()
+            elif self.path == "/health":
+                self.handle_health()
+            else:
+                self.send_error(404)
+        except (BrokenPipeError, ConnectionResetError):
+            logger.info("Client disconnected during GET.")
+        except Exception as e:
+            logger.error(f"Error in do_GET: {e}")
 
     def do_POST(self):
-        parsed_path = urlparse(self.path)
-        if parsed_path.path == "/v1/chat/completions":
-            self.handle_chat_completions()
-        else:
-            self.send_error(404)
+        try:
+            parsed_path = urlparse(self.path)
+            if parsed_path.path == "/v1/chat/completions":
+                self.handle_chat_completions()
+            else:
+                self.send_error(404)
+        except (BrokenPipeError, ConnectionResetError):
+            logger.info("Client disconnected during POST.")
+        except Exception as e:
+            logger.error(f"Error in do_POST: {e}")
 
     def handle_models(self):
         response = {
@@ -284,116 +310,121 @@ class APIHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
 
     def handle_chat_completions(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        if content_length == 0:
-            self.send_error(400, "Missing body")
-            return
-            
-        post_data = self.rfile.read(content_length)
-        
         try:
-            data = json.loads(post_data)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
-
-        messages = data.get("messages")
-        if not messages:
-             self.send_error(400, "Missing 'messages' field")
-             return
-
-        max_tokens = data.get("max_tokens", self.worker.default_max_tokens)
-        stream = data.get("stream", False)
-        
-        # Submit task
-        response_queue = self.worker.submit(messages, max_tokens)
-        
-        # We need to wait for at least the first item to get the ID and created time
-        # But since submit is async, we don't have the ID yet. 
-        # The worker generates the ID. We'll get it with the first result.
-        
-        if stream:
-            self._set_headers(200, 'text/event-stream')
-            self.send_header('Cache-Control', 'no-cache')
-
-            request_id = None
-            created = int(time.time())
-            
-            while True:
-                result = response_queue.get()
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self.send_error(400, "Missing body")
+                return
                 
-                # In a real implementation we would get the ID from the result
-                # For now we generate one if missing (though worker generates one, we don't pass it back in Result object currently)
-                # Let's fix GenerationResult to carry ID if needed, or just generate one here.
-                # The worker generates an ID but we don't easily get it back until the first token.
-                # For simplicity, we'll generate a request ID here if we don't have one, 
-                # but ideally it should come from the worker to be consistent.
-                if request_id is None:
-                    request_id = f"chatcmpl-{uuid.uuid4()}"
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                data = json.loads(post_data)
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
 
-                if result.finish_reason:
-                    # Send final chunk if there is remaining text
-                    if result.text_segment:
-                         chunk = {
+            messages = data.get("messages")
+            if not messages:
+                self.send_error(400, "Missing 'messages' field")
+                return
+
+            max_tokens = data.get("max_tokens", self.worker.default_max_tokens)
+            stream = data.get("stream", False)
+            
+            # Submit task
+            response_queue = self.worker.submit(messages, max_tokens)
+            
+            # We need to wait for at least the first item to get the ID and created time
+            # But since submit is async, we don't have the ID yet. 
+            # The worker generates the ID. We'll get it with the first result.
+            
+            if stream:
+                self._set_headers(200, 'text/event-stream')
+                self.send_header('Cache-Control', 'no-cache')
+
+                request_id = None
+                created = int(time.time())
+                
+                while True:
+                    result = response_queue.get()
+                    
+                    # In a real implementation we would get the ID from the result
+                    # For now we generate one if missing (though worker generates one, we don't pass it back in Result object currently)
+                    # Let's fix GenerationResult to carry ID if needed, or just generate one here.
+                    # The worker generates an ID but we don't easily get it back until the first token.
+                    # For simplicity, we'll generate a request ID here if we don't have one, 
+                    # but ideally it should come from the worker to be consistent.
+                    if request_id is None:
+                        request_id = f"chatcmpl-{uuid.uuid4()}"
+
+                    if result.finish_reason:
+                        # Send final chunk if there is remaining text
+                        if result.text_segment:
+                                chunk = {
+                                "id": request_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": self.worker.model_path,
+                                "choices": [{"index": 0, "delta": {"content": result.text_segment}, "finish_reason": None}]
+                            }
+                                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode('utf-8'))
+                        
+                        # Send done
+                        final_chunk = {
                             "id": request_id,
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": self.worker.model_path,
-                            "choices": [{"index": 0, "delta": {"content": result.text_segment}, "finish_reason": None}]
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": result.finish_reason}]
                         }
-                         self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode('utf-8'))
+                        self.wfile.write(f"data: {json.dumps(final_chunk)}\n\n".encode('utf-8'))
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        break
                     
-                    # Send done
-                    final_chunk = {
+                    chunk = {
                         "id": request_id,
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": self.worker.model_path,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": result.finish_reason}]
+                        "choices": [{"index": 0, "delta": {"content": result.text_segment}, "finish_reason": None}]
                     }
-                    self.wfile.write(f"data: {json.dumps(final_chunk)}\n\n".encode('utf-8'))
-                    self.wfile.write(b"data: [DONE]\n\n")
-                    break
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode('utf-8'))
+                    self.wfile.flush()
+            else:
+                full_text = ""
+                finish_reason = None
+                prompt_tokens = 0
+                completion_tokens = 0
                 
-                chunk = {
-                    "id": request_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
+                while True:
+                    result = response_queue.get()
+                    full_text += result.text_segment
+                    completion_tokens += 1 # Approximate
+                    if result.finish_reason:
+                        finish_reason = result.finish_reason
+                        prompt_tokens = result.prompt_tokens
+                        break
+                
+                response = {
+                    "id": f"chatcmpl-{uuid.uuid4()}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
                     "model": self.worker.model_path,
-                    "choices": [{"index": 0, "delta": {"content": result.text_segment}, "finish_reason": None}]
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": full_text}, "finish_reason": finish_reason}],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens
+                    } 
                 }
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode('utf-8'))
-                self.wfile.flush()
-        else:
-            full_text = ""
-            finish_reason = None
-            prompt_tokens = 0
-            completion_tokens = 0
-            
-            while True:
-                result = response_queue.get()
-                full_text += result.text_segment
-                completion_tokens += 1 # Approximate
-                if result.finish_reason:
-                    finish_reason = result.finish_reason
-                    prompt_tokens = result.prompt_tokens
-                    break
-            
-            response = {
-                "id": f"chatcmpl-{uuid.uuid4()}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": self.worker.model_path,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": full_text}, "finish_reason": finish_reason}],
-                "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
-                } 
-            }
-            
-            self._set_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
+                
+                self._set_headers()
+                self.wfile.write(json.dumps(response).encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError):
+            logger.info("Client disconnected during request handling.")
+        except Exception as e:
+            logger.error(f"Error in handle_chat_completions: {e}")
 
 def run(host: str, port: int, worker: ModelWorker):
     server_address = (host, port)
@@ -507,6 +538,17 @@ def main():
         help="""A JSON formatted string of arguments for the tokenizer's apply_chat_template, e.g. '{"enable_thinking":false}'""",
         default="{}",
     )
+    parser.add_argument(
+        "--radix-cache-size",
+        type=int,
+        default=1024 * 1024 * 1024,
+        help="Size of the Radix Cache in bytes (default: 1GB)",
+    )
+    parser.add_argument(
+        "--use-prompt-cache",
+        action="store_true",
+        help="Enable prompt caching (default: False)",
+    )
     args = parser.parse_args()
 
     # Update logging level
@@ -524,7 +566,9 @@ def main():
         top_p=args.top_p,
         top_k=args.top_k,
         min_p=args.min_p,
-        default_max_tokens=args.max_tokens
+        default_max_tokens=args.max_tokens,
+        radix_cache_size=args.radix_cache_size,
+        use_prompt_cache=args.use_prompt_cache
     )
     worker.start()
 
@@ -532,3 +576,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

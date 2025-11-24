@@ -11,6 +11,7 @@ The server provides an OpenAI API compatible interface (`/v1/chat/completions`),
 ### Features
 
 - **Dynamic Batching**: Automatically merges multiple concurrent requests into a single batch for inference, maximizing GPU utilization.
+- **Prompt Caching**: Leverages Radix Tree based caching to reuse KV cache across requests with shared prefixes (e.g. system prompts, multi-turn chat history), significantly reducing Time To First Token (TTFT).
 - **OpenAI Compatible**: Supports the standard OpenAI Chat Completions API.
 - **Streaming Output**: Supports Server-Sent Events (SSE) streaming output.
 
@@ -19,7 +20,11 @@ The server provides an OpenAI API compatible interface (`/v1/chat/completions`),
 Start the server:
 
 ```bash
-mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
+# Basic usage
+python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
+
+# With Prompt Caching enabled (Recommended for multi-turn chat)
+python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --use-prompt-cache --radix-cache-size 2147483648
 ```
 
 ### Arguments
@@ -31,7 +36,18 @@ mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 | `--host` | Host address to bind | 127.0.0.1 |
 | `--port` | Port to listen on | 8080 |
 | `--batch-size` | Maximum batch size | 32 |
+| `--max-tokens` | Default maximum number of tokens to generate | 512 |
+| `--trust-remote-code` | Enable trusting remote code for tokenizer | False |
 | `--log-level` | Log level (DEBUG, INFO, WARNING, ERROR) | INFO |
+| `--use-prompt-cache` | Enable prompt caching | False |
+| `--radix-cache-size` | Size of the Radix Cache in bytes | 1073741824 (1GB) |
+| `--chat-template` | Specify a chat template for the tokenizer | "" |
+| `--use-default-chat-template` | Use the default chat template | False |
+| `--chat-template-args` | JSON formatted string of arguments for chat template | "{}" |
+| `--temp` | Default sampling temperature | 0.0 |
+| `--top-p` | Default nucleus sampling top-p | 1.0 |
+| `--top-k` | Default top-k sampling | 0 |
+| `--min-p` | Default min-p sampling | 0.0 |
 
 ### API Call Example
 
@@ -66,7 +82,7 @@ pip install openai
 Run the benchmark:
 
 ```bash
-python benchmark_client.py --concurrency 8 --requests 50 --stream --model mlx-community/Llama-3.2-3B-Instruct-4bit
+python mlx_lm/examples/benchmark_client.py --concurrency 8 --requests 50 --stream --model mlx-community/Llama-3.2-3B-Instruct-4bit
 ```
 
 ### Arguments
@@ -95,3 +111,24 @@ After the test completes, the client outputs the following statistics:
 - **Avg Latency**: Average request latency (from sending to receiving full response).
 - **Avg TTFT (Time To First Token)**: Average Time To First Token (Accurate only in streaming mode).
 - **Avg ITL (Inter-Token Latency)**: Average Inter-Token Latency (Generation smoothness).
+
+---
+
+## Prompt Cache Test
+
+`test_prompt_cache.py` is a specialized test script designed to verify the effectiveness of the Prompt Cache mechanism.
+
+### Usage
+
+```bash
+python mlx_lm/examples/test_prompt_cache.py --model mlx-community/Llama-3.2-3B-Instruct-4bit --concurrency 4
+```
+
+### How it works
+
+The test runs 3 rounds of requests for each concurrent thread:
+1.  **Round 1**: Sends a unique long prompt (~1500 tokens). This populates the cache.
+2.  **Round 2**: Sends the same prompt as Round 1 plus a suffix. This should hit the cache and have a significantly lower TTFT.
+3.  **Round 3**: Sends the same prompt as Round 1 plus a different suffix. This should also hit the cache.
+
+The script calculates the speedup ratio between Round 1 and Round 2 to validate acceleration.

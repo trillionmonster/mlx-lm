@@ -778,10 +778,23 @@ class BatchKVCache(_BaseCache):
                 k = mx.pad(k, pad)
                 v = mx.pad(v, pad)
             left_padding = c.left_padding + left
-            return k, v, c.offset, left_padding
+            
+            # Ensure offset and left_padding are at least 1D
+            offset = c.offset
+            if isinstance(offset, int):
+                offset = mx.array([offset])
+            elif offset.ndim == 0:
+                offset = offset[None]
+                
+            if isinstance(left_padding, int):
+                left_padding = mx.array([left_padding])
+            elif left_padding.ndim == 0:
+                left_padding = left_padding[None]
+                
+            return k, v, offset, left_padding
 
         self.keys, self.values, self.offset, self.left_padding = map(
-            mx.concatenate, zip(*(pad(self), pad(other)))
+            lambda x: mx.concatenate([mx.array(i) for i in x]), zip(*(pad(self), pad(other)))
         )
         self._idx = max_idx
 
@@ -998,10 +1011,23 @@ class BatchRotatingKVCache(_BaseCache):
                 k = mx.pad(k, pad)
                 v = mx.pad(v, pad)
             left_padding = c.left_padding + left
-            return k, v, c.offset, left_padding
+            
+            # Ensure offset and left_padding are at least 1D
+            offset = c.offset
+            if isinstance(offset, int):
+                offset = mx.array([offset])
+            elif offset.ndim == 0:
+                offset = offset[None]
+                
+            if isinstance(left_padding, int):
+                left_padding = mx.array([left_padding])
+            elif left_padding.ndim == 0:
+                left_padding = left_padding[None]
+                
+            return k, v, offset, left_padding
 
         self.keys, self.values, self.offset, self.left_padding = map(
-            mx.concatenate, zip(*(pad(self), pad(other)))
+            lambda x: mx.concatenate([mx.array(i) for i in x]), zip(*(pad(self), pad(other)))
         )
         self._idx = max_idx
         self._offset = max(self._offset, other._offset)
