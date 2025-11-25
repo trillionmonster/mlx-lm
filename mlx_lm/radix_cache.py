@@ -258,7 +258,7 @@ class RadixCache:
                         # Normal KV Cache, can try to slice
                         total_match_len = matched_len + common_len
                         try:
-                            cached_kv = _slice_cache(child.value, common_len)
+                            cached_kv = _slice_cache(child.value, total_match_len)
                             logger.debug(f"[RadixCache] Sliced cache at depth {total_match_len}")
                             return list(tokens_tuple[:total_match_len]), cached_kv, node
                         except ValueError:
