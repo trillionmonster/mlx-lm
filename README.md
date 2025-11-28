@@ -28,10 +28,10 @@ Start the server:
 
 ```bash
 # Basic usage
-python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
+mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 
 # With Prompt Caching enabled (Recommended for multi-turn chat)
-python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --use-prompt-cache --radix-cache-size 2147483648
+mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --use-prompt-cache --radix-cache-size 2147483648
 ```
 
 ### Arguments
