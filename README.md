@@ -1,9 +1,9 @@
 # Thanks To [MLM-LM](https://github.com/ml-explore/mlx-lm) BUT batch dynamic server is really Useful，
 
 ##  just have a Try:
-'''
+`
 pip install git+https://github.com/trillionmonster/mlx-lm-batch-server.git
-'''
+`
 
 # MLX LM Examples
 
