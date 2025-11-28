@@ -1,4 +1,4 @@
-# Thanks To [MLM-LM](https://github.com/ml-explore/mlx-lm) BUT batch dynamic server is really Useful，
+# Thanks To [MLM-LM](https://github.com/ml-explore/mlx-lm) BUT batch dynamic server is really Useful
 
 ##  just have a Try:
 `
