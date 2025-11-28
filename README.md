@@ -1,283 +1,141 @@
-## MLX LM 
+# Thanks To [MLM-LM](https://github.com/ml-explore/mlx-lm) BUT batch dynamic server is really Useful，
 
-MLX LM is a Python package for generating text and fine-tuning large language
-models on Apple silicon with MLX.
+##  just have a Try:
+'''
+pip install git+https://github.com/trillionmonster/mlx-lm-batch-server.git
+'''
 
-Some key features include:
+# MLX LM Examples
 
-* Integration with the Hugging Face Hub to easily use thousands of LLMs with a
-  single command. 
-* Support for quantizing and uploading models to the Hugging Face Hub.
-* [Low-rank and full model
-  fine-tuning](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/LORA.md)
-  with support for quantized models.
-* Distributed inference and fine-tuning with `mx.distributed`
+This directory contains advanced examples built using `mlx-lm`.
 
-The easiest way to get started is to install the `mlx-lm` package:
+## Dynamic Batch Server
 
-**With `pip`**:
+`mlx_lm.batch_server` is a lightweight inference server implemented based on Python's `http.server`. It utilizes `mlx-lm`'s `BatchGenerator` to implement dynamic batching, significantly improving throughput when handling concurrent requests.
 
-```sh
-pip install mlx-lm
-```
+The server provides an OpenAI API compatible interface (`/v1/chat/completions`), supporting both streaming and non-streaming responses.
 
-**With `conda`**:
+### Features
 
-```sh
-conda install -c conda-forge mlx-lm
-```
+- **Dynamic Batching**: Automatically merges multiple concurrent requests into a single batch for inference, maximizing GPU utilization.
+- **Prompt Caching**: Leverages Radix Tree based caching to reuse KV cache across requests with shared prefixes (e.g. system prompts, multi-turn chat history), significantly reducing Time To First Token (TTFT).
+- **OpenAI Compatible**: Supports the standard OpenAI Chat Completions API.
+- **Streaming Output**: Supports Server-Sent Events (SSE) streaming output.
 
-### Quick Start
+### Usage
 
-To generate text with an LLM use:
+Start the server:
 
 ```bash
-mlx_lm.generate --prompt "How tall is Mt Everest?"
+# Basic usage
+python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
+
+# With Prompt Caching enabled (Recommended for multi-turn chat)
+python -m mlx_lm.batch_server --model mlx-community/Llama-3.2-3B-Instruct-4bit --use-prompt-cache --radix-cache-size 2147483648
 ```
 
-To chat with an LLM use:
+### Arguments
+
+| Argument | Description | Default |
+|------|------|--------|
+| `--model` | Model path or Hugging Face repo ID (Required) | - |
+| `--adapter-path` | LoRA adapter path (Optional) | None |
+| `--host` | Host address to bind | 127.0.0.1 |
+| `--port` | Port to listen on | 8080 |
+| `--batch-size` | Maximum batch size | 32 |
+| `--max-tokens` | Default maximum number of tokens to generate | 512 |
+| `--trust-remote-code` | Enable trusting remote code for tokenizer | False |
+| `--log-level` | Log level (DEBUG, INFO, WARNING, ERROR) | INFO |
+| `--use-prompt-cache` | Enable prompt caching | False |
+| `--radix-cache-size` | Size of the Radix Cache in bytes | 1073741824 (1GB) |
+| `--chat-template` | Specify a chat template for the tokenizer | "" |
+| `--use-default-chat-template` | Use the default chat template | False |
+| `--chat-template-args` | JSON formatted string of arguments for chat template | "{}" |
+| `--temp` | Default sampling temperature | 0.0 |
+| `--top-p` | Default nucleus sampling top-p | 1.0 |
+| `--top-k` | Default top-k sampling | 0 |
+| `--min-p` | Default min-p sampling | 0.0 |
+
+### API Call Example
+
+You can use `curl` or the `openai` Python client to make calls:
 
 ```bash
-mlx_lm.chat
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'
 ```
 
-This will give you a chat REPL that you can use to interact with the LLM. The
-chat context is preserved during the lifetime of the REPL.
+---
 
-Commands in `mlx-lm` typically take command line options which let you specify
-the model, sampling parameters, and more. Use `-h` to see a list of available
-options for a command, e.g.:
+## Benchmark Client
+
+`benchmark_client.py` is a tool for stress testing and performance evaluation. It can simulate multiple concurrent users sending requests to the server and calculate key performance metrics.
+
+### Dependencies
+
+Requires the `openai` library:
 
 ```bash
-mlx_lm.generate -h
+pip install openai
 ```
 
-The default model for generation and chat is
-`mlx-community/Llama-3.2-3B-Instruct-4bit`.  You can specify any MLX-compatible
-model with the `--model` flag. Thousands are available in the
-[MLX Community](https://huggingface.co/mlx-community) Hugging Face
-organization.
+### Usage
 
-### Python API
-
-You can use `mlx-lm` as a module:
-
-```python
-from mlx_lm import load, generate
-
-model, tokenizer = load("mlx-community/Mistral-7B-Instruct-v0.3-4bit")
-
-prompt = "Write a story about Einstein"
-
-messages = [{"role": "user", "content": prompt}]
-prompt = tokenizer.apply_chat_template(
-    messages, add_generation_prompt=True
-)
-
-text = generate(model, tokenizer, prompt=prompt, verbose=True)
-```
-
-To see a description of all the arguments you can do:
-
-```
->>> help(generate)
-```
-
-Check out the [generation
-example](https://github.com/ml-explore/mlx-lm/tree/main/mlx_lm/examples/generate_response.py)
-to see how to use the API in more detail. Check out the [batch generation
-example](https://github.com/ml-explore/mlx-lm/tree/main/mlx_lm/examples/batch_generate_response.py)
-to see how to efficiently generate continuations for a batch of prompts.
-
-The `mlx-lm` package also comes with functionality to quantize and optionally
-upload models to the Hugging Face Hub.
-
-You can convert models using the Python API:
-
-```python
-from mlx_lm import convert
-
-repo = "mistralai/Mistral-7B-Instruct-v0.3"
-upload_repo = "mlx-community/My-Mistral-7B-Instruct-v0.3-4bit"
-
-convert(repo, quantize=True, upload_repo=upload_repo)
-```
-
-This will generate a 4-bit quantized Mistral 7B and upload it to the repo
-`mlx-community/My-Mistral-7B-Instruct-v0.3-4bit`. It will also save the
-converted model in the path `mlx_model` by default.
-
-To see a description of all the arguments you can do:
-
-```
->>> help(convert)
-```
-
-#### Streaming
-
-For streaming generation, use the `stream_generate` function. This yields
-a generation response object.
-
-For example,
-
-```python
-from mlx_lm import load, stream_generate
-
-repo = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
-model, tokenizer = load(repo)
-
-prompt = "Write a story about Einstein"
-
-messages = [{"role": "user", "content": prompt}]
-prompt = tokenizer.apply_chat_template(
-    messages, add_generation_prompt=True
-)
-
-for response in stream_generate(model, tokenizer, prompt, max_tokens=512):
-    print(response.text, end="", flush=True)
-print()
-```
-
-#### Sampling
-
-The `generate` and `stream_generate` functions accept `sampler` and
-`logits_processors` keyword arguments. A sampler is any callable which accepts
-a possibly batched logits array and returns an array of sampled tokens.  The
-`logits_processors` must be a list of callables which take the token history
-and current logits as input and return the processed logits. The logits
-processors are applied in order.
-
-Some standard sampling functions and logits processors are provided in
-`mlx_lm.sample_utils`.
-
-### Command Line
-
-You can also use `mlx-lm` from the command line with:
-
-```
-mlx_lm.generate --model mistralai/Mistral-7B-Instruct-v0.3 --prompt "hello"
-```
-
-This will download a Mistral 7B model from the Hugging Face Hub and generate
-text using the given prompt.
-
-For a full list of options run:
-
-```
-mlx_lm.generate --help
-```
-
-To quantize a model from the command line run:
-
-```
-mlx_lm.convert --hf-path mistralai/Mistral-7B-Instruct-v0.3 -q
-```
-
-For more options run:
-
-```
-mlx_lm.convert --help
-```
-
-You can upload new models to Hugging Face by specifying `--upload-repo` to
-`convert`. For example, to upload a quantized Mistral-7B model to the
-[MLX Hugging Face community](https://huggingface.co/mlx-community) you can do:
-
-```
-mlx_lm.convert \
-    --hf-path mistralai/Mistral-7B-Instruct-v0.3 \
-    -q \
-    --upload-repo mlx-community/my-4bit-mistral
-```
-
-Models can also be converted and quantized directly in the
-[mlx-my-repo](https://huggingface.co/spaces/mlx-community/mlx-my-repo) Hugging
-Face Space.
-
-### Long Prompts and Generations 
-
-`mlx-lm` has some tools to scale efficiently to long prompts and generations:
-
-- A rotating fixed-size key-value cache.
-- Prompt caching
-
-To use the rotating key-value cache pass the argument `--max-kv-size n` where
-`n` can be any integer. Smaller values like `512` will use very little RAM but
-result in worse quality. Larger values like `4096` or higher will use more RAM
-but have better quality.
-
-Caching prompts can substantially speedup reusing the same long context with
-different queries. To cache a prompt use `mlx_lm.cache_prompt`. For example:
+Run the benchmark:
 
 ```bash
-cat prompt.txt | mlx_lm.cache_prompt \
-  --model mistralai/Mistral-7B-Instruct-v0.3 \
-  --prompt - \
-  --prompt-cache-file mistral_prompt.safetensors
-``` 
-
-Then use the cached prompt with `mlx_lm.generate`:
-
-```
-mlx_lm.generate \
-    --prompt-cache-file mistral_prompt.safetensors \
-    --prompt "\nSummarize the above text."
+python mlx_lm/examples/benchmark_client.py --concurrency 8 --requests 50 --stream --model mlx-community/Llama-3.2-3B-Instruct-4bit
 ```
 
-The cached prompt is treated as a prefix to the supplied prompt. Also notice
-when using a cached prompt, the model to use is read from the cache and need
-not be supplied explicitly.
+### Arguments
 
-Prompt caching can also be used in the Python API in order to avoid
-recomputing the prompt. This is useful in multi-turn dialogues or across
-requests that use the same context. See the
-[example](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/examples/chat.py)
-for more usage details.
+| Argument | Description | Default |
+|------|------|--------|
+| `--base-url` | API Base URL | http://localhost:8080/v1 |
+| `--api-key` | API Key (Can be anything if server doesn't verify) | EMPTY |
+| `--model` | Model name | default_model |
+| `--concurrency` | Number of concurrent threads (simulated users) | 4 |
+| `--requests` | Total number of requests to send | 20 |
+| `--stream` | Whether to use streaming requests (Recommended for calculating TTFT) | False |
+| `--min-delay` | Minimum random delay between requests (seconds) | 0.1 |
+| `--max-delay` | Maximum random delay between requests (seconds) | 2.0 |
+| `--min-tokens` | Minimum tokens to generate (controlled via max_tokens) | 10 |
+| `--max-tokens` | Maximum tokens to generate | 512 |
 
-### Supported Models
+### Output Metrics Explanation
 
-`mlx-lm` supports thousands of LLMs available on the Hugging Face Hub. If the
-model you want to run is not supported, file an
-[issue](https://github.com/ml-explore/mlx-lm/issues/new) or better yet, submit
-a pull request. Many supported models are available in various quantization
-formats in the [MLX Community](https://huggingface.co/mlx-community) Hugging
-Face organization.
+After the test completes, the client outputs the following statistics:
 
-For some models the tokenizer may require you to enable the `trust_remote_code`
-option. You can do this by passing `--trust-remote-code` in the command line.
-If you don't specify the flag explicitly, you will be prompted to trust remote
-code in the terminal when running the model. 
+- **Successful requests**: Number of requests successfully completed.
+- **Total tokens generated**: Total number of tokens generated across all requests.
+- **Total duration**: Total duration of the test.
+- **Throughput (TPS)**: System throughput (Tokens Per Second).
+- **Avg Latency**: Average request latency (from sending to receiving full response).
+- **Avg TTFT (Time To First Token)**: Average Time To First Token (Accurate only in streaming mode).
+- **Avg ITL (Inter-Token Latency)**: Average Inter-Token Latency (Generation smoothness).
 
-Tokenizer options can also be set in the Python API. For example:
+---
 
-```python
-model, tokenizer = load(
-    "qwen/Qwen-7B",
-    tokenizer_config={"eos_token": "<|endoftext|>", "trust_remote_code": True},
-)
-```
+## Prompt Cache Test
 
-### Large Models
+`test_prompt_cache.py` is a specialized test script designed to verify the effectiveness of the Prompt Cache mechanism.
 
-> [!NOTE]
-    This requires macOS 15.0 or higher to work.
-
-Models which are large relative to the total RAM available on the machine can
-be slow. `mlx-lm` will attempt to make them faster by wiring the memory
-occupied by the model and cache. This requires macOS 15 or higher to
-work.
-
-If you see the following warning message:
-
-> [WARNING] Generating with a model that requires ...
-
-then the model will likely be slow on the given machine. If the model fits in
-RAM then it can often be sped up by increasing the system wired memory limit.
-To increase the limit, set the following `sysctl`:
+### Usage
 
 ```bash
-sudo sysctl iogpu.wired_limit_mb=N
+python mlx_lm/examples/test_prompt_cache.py --model mlx-community/Llama-3.2-3B-Instruct-4bit --concurrency 4
 ```
 
-The value `N` should be larger than the size of the model in megabytes but
-smaller than the memory size of the machine.
+### How it works
+
+The test runs 3 rounds of requests for each concurrent thread:
+1.  **Round 1**: Sends a unique long prompt (~1500 tokens). This populates the cache.
+2.  **Round 2**: Sends the same prompt as Round 1 plus a suffix. This should hit the cache and have a significantly lower TTFT.
+3.  **Round 3**: Sends the same prompt as Round 1 plus a different suffix. This should also hit the cache.
+
+The script calculates the speedup ratio between Round 1 and Round 2 to validate acceleration.
